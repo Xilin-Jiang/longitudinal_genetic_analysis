@@ -226,6 +226,7 @@ simulate_interacted_genetic_profiles_ph <- function(N, num_snp,num_buckets,beta_
   para$p <- 3
   para$X <- X_cb_spline(para$p,8)
   para$sigma0inv <- solve(diag(para$p) * 1) 
+  
   para$snp_lst <- as.list(1:num_snp)
   sigmasnp <- 0.0004
   para$sigmaSAMPLE <- lapply(para$snp_lst, function(x) diag(SE_Surv[x,]^2) + sigmasnp) 
@@ -250,6 +251,59 @@ simulate_interacted_genetic_profiles_ph <- function(N, num_snp,num_buckets,beta_
   para$variance_g <- variance_g
   para$h_0 <- h_0
   return(list(para, rslt_alt_hyp))
+}
+
+# A wrrapper function for the whole simulation and inference procedure
+simulation <- function(N, num_snp,num_buckets,latent_curve, SIGMA, h_0, mv_flag, mtcv_flag, gamma_shape, degree_freedom){
+  # mv_flag determine whether the estimate is univariate or multivariate
+  # mtcv_flag determine what hypothesis this is testing
+  # simulate with multivariate genetics effect
+  if(mv_flag){
+    rslt_ph <- simulate_multivariate_ph(N, num_snp,num_buckets,latent_curve, SIGMA, h_0, flag_multi_curve = mtcv_flag, gamma_shape)
+  }else{
+    rslt_ph <- simulate_genetic_profiles_ph(N, num_snp,num_buckets,latent_curve, SIGMA, h_0, flag_multi_curve = mtcv_flag, gamma_shape)
+  }
+  
+  Beta_surv <- rslt_ph[[1]]
+  SE_Surv <- rslt_ph[[2]]
+  h <- rslt_ph[[3]]
+  # use para to save all the inference parameters
+  para <- list()
+  para$p <- degree_freedom
+  para$X <- X_cb_spline(para$p,8)
+  para$sigma0inv <- solve(diag(para$p) * 1) 
+  
+  para$snp_lst <- as.list(1:num_snp)
+  sigmasnp <- 0.0004
+  para$sigmaSAMPLE <- lapply(para$snp_lst, function(x) diag(SE_Surv[x,]^2) + sigmasnp) 
+  # there is cases when sigmaSAMPLE is singular, need to check
+  if(any(lapply(para$sigmaSAMPLE, function(x) det(x) == 0))){
+    # for sigular sigmaSAMPLE, there should be some annoying numeric issue, just ignore it
+    return(NA)
+  }
+  para$sigmainverse <- para$sigmaSAMPLE %>%
+    lapply(function(x) solve(x))
+  para$betaj <- lapply(para$snp_lst, function(x) matrix(Beta_surv[x,]))
+  para$sigmabeta <- mapply(function(x,y) x %*% y, para$sigmainverse, para$betaj, SIMPLIFY = FALSE) 
+  para$M <- length(para$betaj[[1]])
+  para$S <- length(para$betaj)
+  if(mtcv_flag){
+    rslt_alt_hyp <- EM_K(2,100, para)
+    rslt_null_hyp <- EM_K(1,100, para)
+  }else{
+    rslt_alt_hyp <- EM_K(1,100, para)
+    para$p <- 1
+    para$X <- X_cb_spline(para$p,8)
+    para$sigma0inv <- solve(diag(para$p) * 1) 
+    rslt_null_hyp <- EM_K(1,100, para)
+  }
+  # save some important variable
+  para$num_snp <- num_snp
+  para$num_buckets <- num_buckets
+  para$latent_curve <- latent_curve
+  para$SIGMA <- SIGMA
+  para$h_0 <- h_0
+  return(list(para, rslt_ph, rslt_alt_hyp, rslt_null_hyp))
 }
 
 # here is a function for the threshold based model

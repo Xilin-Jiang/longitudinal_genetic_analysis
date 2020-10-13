@@ -17,290 +17,9 @@ skyblue <- cbPalette[3]
 
 args <- commandArgs(trailingOnly = TRUE) 
 s_id <- as.numeric(args[1])
+source("Genetic_longitudinal_functions.R")
 
-# checking the source of the bias
-generate_genetics <- function(maf, n){
-  u <- runif(n)
-  sapply(u, function(y) ifelse(y<maf^2, 2 , ifelse(y < (2*maf - maf^2), 1,0)))
-}
-
-simulate_genetic_profiles_ph <- function(N, num_snp,num_buckets,latent_curve, SIGMA, h_0, flag_multi_curve, gamma_shape){
-  # generate risk age profile
-  if(flag_multi_curve){
-    # the first curve should be a flat curve
-    flat_curve <- rep(mean(latent_curve), num_buckets)
-    #prf1 <- rmvnorm(floor(num_snp/2), mean = flat_curve, SIGMA)
-    #prf2 <- rmvnorm((num_snp - floor(num_snp/2)), mean = latent_curve, SIGMA)
-    # simulate with less decreasing effect
-    prf1 <- rmvnorm(num_snp - 5, mean = flat_curve, SIGMA)
-    prf2 <- rmvnorm(5, mean = latent_curve, SIGMA)
-    genetic_profiles <- rbind(prf1, prf2)
-  }else{
-    genetic_profiles <-  rmvnorm(num_snp, mean = latent_curve, SIGMA)
-  }
-  
-  # simulate genetics for the huge population
-  allele_frequency <- runif(num_snp, max = 0.5) # assuming all MAF are risk
-  genetics_population <- sapply(allele_frequency, function(x) generate_genetics(x, N))
-  
-  # simulate unobserved effect
-  u <- rgamma(N, shape = gamma_shape, rate = gamma_shape)
-  
-  # compute the risk age profiles for all individual
-  risk_profiles <- genetics_population %*% genetic_profiles
-  
-  # the procedure is separate into two part: 1. simulate disease onset for each interval 
-  # simulate a censoring process, then take the first event
-  h_population <- exp(risk_profiles) %*% diag(h_0)
-  h_population <- u * h_population # fastest opetion for adding unobserved effect
-  # apply function to each one of the cell in a matrix
-  failure <- apply(h_population,1:2, function(x) rexp(1, x))
-  # simulate censoring
-  h_censoring <- .01
-  censor <- rexp(N,h_censoring)
-  censor <- pmin(censor,40)
-  int_length <- 40/num_buckets
-  # define a function to extract the faillure time
-  extract_failure <- function(x,int_length){
-    id <- which(x<int_length)
-    if(length(id) == 0){
-      return(41) # make it censored, as the censoring will happen <=40
-    }else{
-      return((id[1]-1)* int_length + x[id[1]])
-    }
-  }
-  failure <- apply(failure, 1, function(x) extract_failure(x, int_length))
-  state <- 1*(censor > failure)
-  time <- pmin(failure, censor)
-  
-  # get the survival curve and fit it
-  h <- rep(0,40) 
-  for(i in 1:39){
-    h[i] <- sum(state*time > (i-1) & state*time < i) / sum(time > (i-1)) 
-  }
-  
-  Beta_surv <- matrix(0, num_snp, num_buckets)
-  SE_Surv <- matrix(0, num_snp,num_buckets) 
-  for(gp in 1:num_buckets){
-    cases <- (failure > int_length * (gp-1)) * (failure <= int_length * (gp))*state
-    controls <- (failure > int_length * (gp)) * (censor > int_length * (gp-1))
-    for(snp in 1:num_snp){
-      genetics <- genetics_population[,snp]
-      sample <- data_frame(genetics,time,cases,controls) %>% 
-        filter(cases == 1 | controls == 1 ) %>%
-        mutate(time = pmin(time-int_length * (gp-1), int_length))
-      mySurv <- coxph(Surv(time, cases) ~ genetics, data = sample)
-      SE_Surv[snp, gp] <- sqrt(mySurv$var)
-      Beta_surv[snp, gp] <- mySurv$coefficients
-    }
-  }
-  return(list(Beta_surv, SE_Surv, h))
-}
-
-simulate_multivariate_ph <-function(N, num_snp,num_buckets,latent_curve, SIGMA, h_0, flag_multi_curve, gamma_shape){
-  # generate risk age profile
-  if(flag_multi_curve){
-    # the first curve should be a flat curve
-    flat_curve <- rep(mean(latent_curve), num_buckets)
-    #prf1 <- rmvnorm(floor(num_snp/2), mean = flat_curve, SIGMA)
-    #prf2 <- rmvnorm((num_snp - floor(num_snp/2)), mean = latent_curve, SIGMA)
-    # simulate with less decreasing effect
-    prf1 <- rmvnorm(num_snp - 5, mean = flat_curve, SIGMA)
-    prf2 <- rmvnorm(5, mean = latent_curve, SIGMA)
-    genetic_profiles <- rbind(prf1, prf2)
-  }else{
-    genetic_profiles <-  rmvnorm(num_snp, mean = latent_curve, SIGMA)
-  }
-  
-  # simulate genetics for the huge population
-  allele_frequency <- runif(num_snp, max = .5)
-  genetics_population <- sapply(allele_frequency, function(x) generate_genetics(x, N))
-  # simulate unobserved effect
-  u <- rgamma(N, shape = gamma_shape, rate = gamma_shape)
-  # compute the risk age profiles for all individual
-  risk_profiles <- genetics_population %*% genetic_profiles
-  
-  # the procedure is separate into two part: 1. simulate disease onset for each interval 
-  # simulate a censoring process, then take the first event
-  h_population <- exp(risk_profiles) %*% diag(h_0)
-  h_population <- u * h_population # fastest opetion for adding unobserved effect
-  # apply function to each one of the cell in a matrix
-  failure <- apply(h_population,1:2, function(x) rexp(1, x))
-  # simulate censoring
-  h_censoring <- .01
-  censor <- rexp(N,h_censoring)
-  censor <- pmin(censor,40)
-  int_length <- 40/num_buckets
-  # define a function to extract the faillure time
-  extract_failure <- function(x,int_length){
-    id <- which(x<int_length)
-    if(length(id) == 0){
-      return(41) # make it censored, as the censoring will happen <=40
-    }else{
-      return((id[1]-1)* int_length + x[id[1]])
-    }
-  }
-  failure <- apply(failure, 1, function(x)extract_failure(x, int_length))
-  state <- 1*(censor > failure)
-  time <- pmin(failure, censor)
-  
-  # get the survival curve and fit it
-  h <- rep(0,40) 
-  for(i in 1:39){
-    h[i] <- sum(state*time > (i-1) & state*time < i) / sum(time > (i-1)) 
-  }
-  
-  Beta_surv <- matrix(0, num_snp, num_buckets)
-  SE_Surv <- matrix(0, num_snp,num_buckets) 
-  for(gp in 1:num_buckets){
-    cases <- (failure > int_length * (gp-1)) * (failure <= int_length * (gp))*state
-    controls <- (failure > int_length * (gp)) * (censor > int_length * (gp-1))
-    # get the list of all variables
-    g_list <- "V1 "
-    for(g in 2:num_snp){
-      g_list <- paste0(g_list , " + V", g)
-    }
-    genetics_population <- as.data.frame(genetics_population)
-    sample <- cbind(genetics_population,data_frame(time,cases,controls)) %>% 
-      filter(cases == 1 | controls == 1 ) %>%
-      mutate(time = pmin(time-int_length * (gp-1), int_length))
-    mySurv <- coxph(as.formula(paste0("Surv(time, cases) ~" , g_list) ), data = sample)
-    SE_Surv[, gp] <- sqrt(diag(mySurv$var))
-    Beta_surv[, gp] <- mySurv$coefficients
-  }
-  return(list(Beta_surv, SE_Surv, h))
-}
-
-
-# then do the clustering
-X_cb_spline <- function(P,t){
-  X_base <- cbind(rep(1,t), 1:t, (1:t)^2, (1:t)^3)
-  if(P <= 4){
-    return(as.matrix(X_base[,1:P]))
-  }else{
-    X <- sapply(1+(1:(P-4))*(t-1)/(P-3), function(x) pmax(((1:t)-x)^3,0))
-    return(cbind(X_base, X))
-  }
-}
-
-comp_ll <- function(pi_saver, d_beta_hat,para){
-  pi_d_beta_hat <- mapply(function(x,y) x * y, pi_saver, d_beta_hat, SIMPLIFY = FALSE)
-  vector_for_sum <- sapply(1:para$S, function(j) Reduce("+", lapply(pi_d_beta_hat, function(x) x[j])))
-  return(sum(log(vector_for_sum)))
-}
-comp_z <- function(pi_saver, d_beta_hat){
-  pi_d_beta_hat <- mapply(function(x,y) x * y, pi_saver, d_beta_hat, SIMPLIFY = FALSE)
-  d_sum <- Reduce('+', pi_d_beta_hat)
-  z_prob <- lapply(pi_d_beta_hat, function(x) x/d_sum)
-  return(z_prob)
-}
-comp_theta <- function(z_prob, para){
-  sigma0inv <- solve(matrix(.2, para$p, para$p) + (1-.2) * diag(para$p)) # add prior, super unefficient but good for now
-  z_betaj_sum <- lapply(z_prob, function(z) rowSums(sapply(1:para$S, function(j) z[j] * t(para$X) %*% para$sigmabeta[[j]])))
-  z_sigma_sum <- lapply(z_prob, function(z) sigma0inv + Reduce("+", lapply(1:para$S, function(j) z[j] * t(para$X) %*% para$sigmainverse[[j]] %*% para$X)))
-  theta <- mapply(function(x,y) solve(x, y), z_sigma_sum, z_betaj_sum, SIMPLIFY = FALSE)
-  return(theta)
-}
-comp_pi <- function(z_prob){
-  Ni <- lapply(z_prob, sum)
-  N <- Reduce("+", Ni)
-  pi_saver <- lapply(Ni, function(x) x/N)
-  return(pi_saver)
-}
-EM_K <- function(K, num_itr, flat_flag, para){ # flat flag here refer to whether the first line need to be flat
-  # initialize parameter
-  pi_saver <- list()
-  theta <- list()
-  BETA <- list()
-  d_beta_hat <- list()
-  for(j in 1:K){
-    x <- runif(K)
-    pi_saver[[j]] <- x[j]/sum(x)
-    # pi_saver[[j]] <- 1/K
-    theta[[j]] <-  matrix(rnorm(para$p,sd=.0001),para$p,1) # using a small sd value to avoid NA
-    if(j == 1 && flat_flag){
-      # always force the first component to be a flat line
-      BETA[[j]] <- matrix(0, para$M, 1)
-    }
-    else BETA[[j]] <- para$X %*% theta[[j]]
-    d_beta_hat[[j]] <- sapply(1:para$S, function(x) 
-      dmvnorm(t(para$betaj[[x]]), mean = BETA[[j]], sigma = para$sigmaSAMPLE[[x]]))
-  }
-  saver_ll <- matrix(0, num_itr, 1)
-  for(itr in 1:num_itr){
-    if(itr %% 10 ==0) print(itr)
-    # compute ll
-    ll <- comp_ll(pi_saver, d_beta_hat, para)
-    if(is.na(ll)) break
-    # assert_that(!is.na(ll),  msg = "NA values found!")
-    saver_ll[itr,1] <- ll
-    # M step
-    z_prob <- comp_z(pi_saver, d_beta_hat)
-    # E step
-    theta <- comp_theta(z_prob, para)
-    pi_saver <- comp_pi(z_prob)
-    for(j in 1:K){
-      if(j == 1 && flat_flag){
-        # always force the first component to be a flat line
-        z <- z_prob[[1]]
-        beta0 <- sum(sapply(1:para$S, function(j) z[j] * para$sigmabeta[[j]]))/sum(sapply(1:para$S, function(j) z[j] * para$sigmainverse[[j]]))
-        BETA[[j]] <- matrix(beta0, para$M, 1)
-      }
-      else BETA[[j]] <- para$X %*% theta[[j]]
-      d_beta_hat[[j]] <- sapply(1:para$S, function(x) 
-        dmvnorm(t(para$betaj[[x]]), mean = BETA[[j]], sigma = para$sigmaSAMPLE[[x]]))
-    }
-  }
-  return(list(pi_saver, z_prob, theta, BETA, saver_ll, ll))
-}
 # the first simulation function is to simulate single curve basic case
-simulation <- function(N, num_snp,num_buckets,latent_curve, SIGMA, h_0, mv_flag, mtcv_flag, gamma_shape){
-  # mv_flag determine whether the estimate is univariate or multivariate
-  # mtcv_flag determine what hypothesis this is testing
-  # simulate with multivariate genetics effect
-  if(mv_flag){
-    rslt_ph <- simulate_multivariate_ph(N, num_snp,num_buckets,latent_curve, SIGMA, h_0, flag_multi_curve = mtcv_flag, gamma_shape)
-  }else{
-    rslt_ph <- simulate_genetic_profiles_ph(N, num_snp,num_buckets,latent_curve, SIGMA, h_0, flag_multi_curve = mtcv_flag, gamma_shape)
-  }
-  
-  Beta_surv <- rslt_ph[[1]]
-  SE_Surv <- rslt_ph[[2]]
-  h <- rslt_ph[[3]]
-  # use para to save all the inference parameters
-  para <- list()
-  para$p <- 3
-  para$X <- X_cb_spline(para$p,8)
-  para$snp_lst <- as.list(1:num_snp)
-  sigmasnp <- 0.0004
-  para$sigmaSAMPLE <- lapply(para$snp_lst, function(x) diag(SE_Surv[x,]^2) + sigmasnp) 
-  # there is cases when sigmaSAMPLE is singular, need to check
-  if(any(lapply(para$sigmaSAMPLE, function(x) det(x) == 0))){
-    # for sigular sigmaSAMPLE, there should be some annoying numeric issue, just ignore it
-    return(NA)
-  }
-  para$sigmainverse <- para$sigmaSAMPLE %>%
-    lapply(function(x) solve(x))
-  para$betaj <- lapply(para$snp_lst, function(x) matrix(Beta_surv[x,]))
-  para$sigmabeta <- mapply(function(x,y) x %*% y, para$sigmainverse, para$betaj, SIMPLIFY = FALSE) 
-  para$M <- length(para$betaj[[1]])
-  para$S <- length(para$betaj)
-  if(mtcv_flag){
-    rslt_alt_hyp <- EM_K(2,100, FALSE, para)
-    rslt_null_hyp <- EM_K(1,100, FALSE, para)
-  }else{
-    rslt_alt_hyp <- EM_K(1,100, FALSE, para)
-    rslt_null_hyp <- EM_K(1,100, TRUE, para)
-  }
-  # save some important variable
-  para$num_snp <- num_snp
-  para$num_buckets <- num_buckets
-  para$latent_curve <- latent_curve
-  para$SIGMA <- SIGMA
-  para$h_0 <- h_0
-  return(list(para, rslt_ph, rslt_alt_hyp, rslt_null_hyp))
-}
-
 set.seed(19940110 + s_id)
 num_buckets <- 8
 N <- 50000 # for the surviaval analysis, after case matching, we usually only have 50,000 individual left
@@ -316,6 +35,12 @@ num_snp <- 50
 sigmasnp <- 0.0004
 SIGMA <- 10^(-4) * diag(num_buckets) + sigmasnp
 latent_curve_1 <- rep(beta_0, num_buckets)
+
+####################################################################################
+# change here if you want to fit a linear model, which has degree_freedom <- 2 
+degree_freedom <- 3 
+####################################################################################
+
 ######################################################
 # simulation for the test of non-flat effect
 ######################################################
@@ -325,11 +50,14 @@ s <- s_lst[s_id]
 latent_curve <- latent_curve_1 + s * (-3.5:3.5)
 # do many simulation for a single latent curve
 for(j in 1:100){
-  try(SIM[[j]] <- simulation(N,num_snp,num_buckets,latent_curve, SIGMA, h_0, mv_flag = TRUE, mtcv_flag = FALSE, 10^15))
+  try(SIM[[j]] <- simulation(N,num_snp,num_buckets,latent_curve, SIGMA, h_0, mv_flag = TRUE, mtcv_flag = FALSE, 10^15, degree_freedom))
 }
-
+dir.create("Non_flat_test_jointly")
 save(SIM, file = paste0("Non_flat_test_jointly/joint_non_flat_test",s_id,".Rdata"))
 
+######################################################
+# making figures for the power test of detecting non-flat effect
+######################################################
 # get the power test figure for log-likelihood testing
 p_non_flat <- function(SIM){
   rslt_alt_hyp <- SIM[[3]]
@@ -429,9 +157,9 @@ s <- s_lst[s_id]
 latent_curve <- latent_curve_1 + s * (-3.5:3.5)
 # do many simulation for a single latent curve
 for(j in 1:100){
-  try(SIM[[j]] <- simulation(N,num_snp,num_buckets,latent_curve, SIGMA, h_0, mv_flag = TRUE, mtcv_flag = TRUE, 10^15))
+  try(SIM[[j]] <- simulation(N,num_snp,num_buckets,latent_curve, SIGMA, h_0, mv_flag = TRUE, mtcv_flag = TRUE, 10^15, degree_freedom))
 }
-
+dir.create("multi_curve_test_jointly")
 save(SIM, file =  paste0("multi_curve_test_jointly/multi_curve_test_jointly_",s_id,".Rdata"))
 
 # get the power test figure for log-likelihood testing
@@ -541,7 +269,7 @@ h_poly <- function(t, b,gamma, k){
 sim <- list()
 for(i in 1:10){
   print(i)
-  sim[[i]] <- simulation(num_snp,num_buckets,latent_curve_2, SIGMA, h_0, mv_flag = TRUE, 10^15)
+  sim[[i]] <- simulation(num_snp,num_buckets,latent_curve_2, SIGMA, h_0, mv_flag = TRUE, 10^15, degree_freedom)
 }
 
 # this is for simple visualization
@@ -565,7 +293,7 @@ latent_curve <- latent_curve_1
 gamma_shape <- u_lst[s_id]
 # do many simulation for a single latent curve
 for(j in 1:100){
-  try(SIM[[j]] <- simulation(N,num_snp,num_buckets,latent_curve, SIGMA, h_0, mv_flag = TRUE, mtcv_flag = FALSE, gamma_shape))
+  try(SIM[[j]] <- simulation(N,num_snp,num_buckets,latent_curve, SIGMA, h_0, mv_flag = TRUE, mtcv_flag = FALSE, gamma_shape, degree_freedom))
 }
 
 save(SIM, file = paste0("frailty_test/frailty_test",s_id,".Rdata"))
@@ -651,7 +379,7 @@ latent_curve <- latent_curve_1
 h_0 <- (9.5 + s * (-3.5:3.5))/10000 # underlying risk should be increasing over time
 # do many simulation for a single latent curve
 for(j in 1:100){
-  try(SIM[[j]] <- simulation(N,num_snp,num_buckets,latent_curve, SIGMA, h_0, mv_flag = TRUE, mtcv_flag = FALSE, 10^15))
+  try(SIM[[j]] <- simulation(N,num_snp,num_buckets,latent_curve, SIGMA, h_0, mv_flag = TRUE, mtcv_flag = FALSE, 10^15, degree_freedom))
 }
 
 save(SIM, file = paste0("healthy_elder_effect/joint_healthy_elder_test",s_id,".Rdata"))
@@ -717,8 +445,8 @@ plt
 #####################################################################################
 s <- -0.0
 latent_curve <- latent_curve_1 + s * (-3.5:3.5)
-SIM_univariate <- simulation(N,num_snp,num_buckets,latent_curve, SIGMA, h_0, mv_flag = FALSE, mtcv_flag = FALSE, 10^15)
-SIM_multivariate <- simulation(N,num_snp,num_buckets,latent_curve, SIGMA, h_0, mv_flag = TRUE, mtcv_flag = FALSE, 10^15)
+SIM_univariate <- simulation(N,num_snp,num_buckets,latent_curve, SIGMA, h_0, mv_flag = FALSE, mtcv_flag = FALSE, 10^15, degree_freedom )
+SIM_multivariate <- simulation(N,num_snp,num_buckets,latent_curve, SIGMA, h_0, mv_flag = TRUE, mtcv_flag = FALSE, 10^15, degree_freedom )
 
 h_uni <- SIM_univariate[[2]][[3]]
 prod(1-h_uni)
@@ -782,7 +510,7 @@ plt <- ggplot(df_mean, aes(PHE)) + xlab("Age phase (per 5 year from <45 to >75)"
 plt
 
 #############################################
-# simulate with GxE and GxG, heterogeneity
+# simulate with GxE and GxG, heterogeneity, Figure 5
 #############################################
 source("Genetic_longitudinal_functions.R")
 N <- 50000
@@ -822,9 +550,9 @@ plt <- ggplot(df_mean, aes(PHE)) + xlab("Age phase (per 5year from <45 to >75)")
 
 ggsave("~/Desktop/Writting_up_genetic_risk/GxE.png",width = 6, height = 4,plt)
 
-#########################
-# threshold simulation
-#########################
+#######################################
+# threshold based model simulation, Figure 5
+#######################################
 source("Genetic_longitudinal_functions.R")
 # first condition, the starting point is changed by genetics
 N <- 50000
