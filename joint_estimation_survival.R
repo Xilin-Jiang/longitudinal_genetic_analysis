@@ -8,14 +8,30 @@ library("mvtnorm")
 args <- commandArgs(trailingOnly = TRUE)                                  
 ds_id <- args[1]
 
-data <- read.table("/users/mcvean/xilin/xilin/UK_biobank/covariates_for_asso_over_time.txt", sep="\t") %>%
+##############################################################################################################
+# be aware the section below need to be accomodated for the specific data source.
+# The preprocessing for UK biobank dataset are not fully shown to comply with data sharing requirement of the UK Biobank 
+
+# load the covariates for individuals
+data <- read.table("/XXX/covariates_for_asso_over_time.txt", sep="\t") %>%
   select(-V2,  -V3) %>%
   rename(eid = V1)
+# load getnetic data; the the genotype are encoded as in 0,1,2 for each locus;
+# here we use plink/1.90b2  with flag --recode A to generate the genetic file for the subjects and SNPs of interest
 genetics <- read.table(paste0(ds_id,"/",ds_id,".raw"), header=T) %>%
   select(-IID, -PAT, -MAT, -SEX, -PHENOTYPE) 
 
+# load longitudinal data, which contain rows of events; the data frame has 
+# has four columns: 1. id of the individual 2. event time, which is event point with respect to the beginning of interval; event 
+# 3. group, an integer specify the age interval that cover the events 4. censor, which specify whether the event is disease (indicated by 1) or 
+# a censoring event (indicated by 0). 
 data_coxph <- read.table(paste0(ds_id,"/",ds_id,"_pheno_over_age.txt"), header=F) %>%
   rename(eid = V1, time = V2, group = V3, censor = V4)
+
+
+# be aware the section above need to be accomodated for the specific data source.
+# The section above should load longitudinal information, genotype information, and covaraites. 
+##############################################################################################################
 
 data_coxph <- data_coxph %>%
   left_join(data, by = "eid") %>%
@@ -56,61 +72,41 @@ write.csv(snp_for_clustering, paste(ds_id,"/joint_estimation/",ds_id,"_multivari
 ###############################################
 # doing EM
 ###############################################
-flip_snp <- read.csv(paste(ds_id,"/",ds_id,"_flipped_snp.csv", sep = ""))
-useful_snp_data <- snp_for_clustering %>% 
-  # I need to remove the NAs
-  mutate(SE = ifelse(is.na(SE), 10, SE)) %>%
-  mutate(OR = ifelse(is.na(OR), 1, OR)) %>%
-  mutate(OR = log(OR)) %>%
-  # I will have to control the overflowing of coef (some -> inf)
-  mutate(SE = ifelse(abs(OR) > 10, 10, SE)) %>%
-  mutate(OR = ifelse(abs(OR) > 10, 0, OR)) %>% 
-  mutate(OR = ifelse(SNP %in% flip_snp$SNP, -OR, OR))
-
 source("Genetic_longitudinal_functions.R")
 
-p <- 3
-X <- X_cb_spline(p,8)
-snp_lst <- useful_snp_data %>% 
-  group_by(SNP)  %>%
-  summarise(n()) %>%
-  select(SNP) 
-sl <- snp_lst[["SNP"]]
-snp_lst <- as.list(sl)
-names(snp_lst) <- sl
+para <- load_SNP_coef(paste("univariate_estimation_rm_LD/",ds_id,"_snp_for_clustering.csv", sep = ""), 
+                      "LOCATION OF a FILE that has the loci of protective MAF")
 
-# not using sigmasnp
-sigmasnp <- 0.0004
-sigmaSAMPLE <- snp_lst %>%
-  lapply(function(x) dplyr::filter(useful_snp_data, SNP == x)) %>%
-  lapply(function(x) diag(x[["SE"]]^2) + sigmasnp)
-sigmainverse <- sigmaSAMPLE %>%
-  lapply(function(x) solve(x))
 
-betaj <- snp_lst %>%
-  lapply(function(x) dplyr::filter(useful_snp_data, SNP == x)) %>%
-  lapply(function(x) matrix(x[["OR"]]))
-sigmabeta <- mapply(function(x,y) x %*% y, sigmainverse, betaj, SIMPLIFY = FALSE) 
-
-M <- length(betaj[[1]])
-S <- length(betaj)
 num_itr <- 20  #20
 K <- 6
 ll <- matrix(0, K, num_itr)
 for(k in 1:K){
   for(rep in 1:num_itr){# 1241
+    para$p <- 3
+    para$X <- X_cb_spline(para$p,8)
+    para$sigma0inv <- solve(diag(para$p) * 1) 
     if(k == 1){
-      rslt <- EM_K(k,100, FALSE, FALSE)
+      rslt <- EM_K(k,100, para)
     }else if(k == 2){
-      rslt <- EM_K(k,100, FALSE, FALSE)
+      rslt <- EM_K(k,100, para)
     }else if(k == 3){
-      rslt <- EM_K(k,100, FALSE, FALSE)
+      rslt <- EM_K(k,100, para)
     }else if(k == 4){
-      rslt <- EM_K(k,100, FALSE, FALSE)
+      rslt <- EM_K(k,100, para)
     }else if(k==5){ # the single flat curve 
-      rslt <- EM_K(1, 100, TRUE, FALSE)
+      para$p <- 1
+      para$X <- X_cb_spline(para$p,8)
+      para$sigma0inv <- solve(diag(para$p) * 1) 
+      rslt <- EM_K(1, 100, para)
     }else if(k==6){ # the frailty model
-      rslt <- EM_K(1, 100, FALSE, TRUE)
+      para$p <- 1
+      para$X <- X_cb_spline(para$p,8)
+      load("adjustment.Rdata")
+      adj <- adj[[as.character(ds_id)]]
+      para$X[,1] <- adj
+      para$sigma0inv <- solve(diag(para$p) * 1) 
+      rslt <- EM_K(1, 100, para)
     }
     ll[k, rep] <- rslt[[6]]
   }
@@ -123,18 +119,30 @@ for(k in 1:K){
   likelihood_thre <- ll[k] - .1
   likelihood <- -Inf
   while (likelihood < likelihood_thre) {
+    para$p <- 3
+    para$X <- X_cb_spline(para$p,8)
+    para$sigma0inv <- solve(diag(para$p) * 1) 
     if(k == 1){
-      rslt <- EM_K(k,100, FALSE, FALSE)
+      rslt <- EM_K(k,100, para)
     }else if(k == 2){
-      rslt <- EM_K(k,100, FALSE, FALSE)
+      rslt <- EM_K(k,100, para)
     }else if(k == 3){
-      rslt <- EM_K(k,100, FALSE, FALSE)
+      rslt <- EM_K(k,100, para)
     }else if(k == 4){
-      rslt <- EM_K(k,100, FALSE, FALSE)
+      rslt <- EM_K(k,100, para)
     }else if(k==5){ # the single flat curve 
-      rslt <- EM_K(1, 100, TRUE, FALSE)
+      para$p <- 1
+      para$X <- X_cb_spline(para$p,8)
+      para$sigma0inv <- solve(diag(para$p) * 1) 
+      rslt <- EM_K(1, 100, para)
     }else if(k==6){ # the frailty model
-      rslt <- EM_K(1, 100, FALSE, TRUE)
+      para$p <- 1
+      para$X <- X_cb_spline(para$p,8)
+      load("adjustment.Rdata")
+      adj <- adj[[as.character(ds_id)]]
+      para$X[,1] <- adj
+      para$sigma0inv <- solve(diag(para$p) * 1) 
+      rslt <- EM_K(1, 100, para)
     }
     likelihood <- rslt[[6]]
   }

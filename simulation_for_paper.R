@@ -41,9 +41,9 @@ latent_curve_1 <- rep(beta_0, num_buckets)
 degree_freedom <- 3 
 ####################################################################################
 
-######################################################
-# simulation for the test of non-flat effect
-######################################################
+################################################################
+# SIMULATION BLOCK1: simulation for the test of non-flat effect
+################################################################
 SIM <- list()
 s_lst <- (-100:100)/10000
 s <- s_lst[s_id]
@@ -54,6 +54,49 @@ for(j in 1:100){
 }
 dir.create("Non_flat_test_jointly")
 save(SIM, file = paste0("Non_flat_test_jointly/joint_non_flat_test",s_id,".Rdata"))
+
+######################################################
+# SIMULATION BLOCK2: do the multiple cluster testing
+######################################################
+SIM <- list()
+s_lst <- (-150:150)/4000
+s <- s_lst[s_id]
+latent_curve <- latent_curve_1 + s * (-3.5:3.5)
+# do many simulation for a single latent curve
+for(j in 1:100){
+  try(SIM[[j]] <- simulation(N,num_snp,num_buckets,latent_curve, SIGMA, h_0, mv_flag = TRUE, mtcv_flag = TRUE, 10^15, degree_freedom))
+}
+dir.create("multi_curve_test_jointly")
+save(SIM, file =  paste0("multi_curve_test_jointly/multi_curve_test_jointly_",s_id,".Rdata"))
+
+######################################################
+# SIMULATION BLOCK3: simulation with different frailty
+######################################################
+SIM <- list()
+u_lst <- exp(0.1*(1:100))
+latent_curve <- latent_curve_1 
+gamma_shape <- u_lst[s_id]
+# do many simulation for a single latent curve
+for(j in 1:100){
+  try(SIM[[j]] <- simulation(N,num_snp,num_buckets,latent_curve, SIGMA, h_0, mv_flag = TRUE, mtcv_flag = FALSE, gamma_shape, degree_freedom))
+}
+
+save(SIM, file = paste0("frailty_test/frailty_test",s_id,".Rdata"))
+
+#################################################################
+# SIMULATION BLOCK4: test the effect of a healthier population
+#################################################################
+SIM <- list()
+s_lst <- (-100:100)/100
+s <- s_lst[s_id]
+latent_curve <- latent_curve_1 
+h_0 <- (9.5 + s * (-3.5:3.5))/10000 # underlying risk should be increasing over time
+# do many simulation for a single latent curve
+for(j in 1:100){
+  try(SIM[[j]] <- simulation(N,num_snp,num_buckets,latent_curve, SIGMA, h_0, mv_flag = TRUE, mtcv_flag = FALSE, 10^15, degree_freedom))
+}
+
+save(SIM, file = paste0("healthy_elder_effect/joint_healthy_elder_test",s_id,".Rdata"))
 
 ######################################################
 # making figures for the power test of detecting non-flat effect
@@ -115,7 +158,7 @@ plt <- ggplot(df_mean, aes(PHE)) + xlab("Age phase (per 5 year from <45 to >75)"
   geom_line(aes(y = true_curve), colour = blue, linetype = "dashed", size = 3) + ylim(c(0.04, 0.15))
 ggsave("~/Desktop/Writting_up_genetic_risk/simulation_fitting_multivariate_1.png", width = 4, height = 4)
 #########################################
-# 2020-2-17 get the coverage of interval
+# get the coverage of interval
 #########################################
 P <- .2
 sigma0 <- matrix(P, 3, 3) + (1-P) * diag(3)
@@ -149,20 +192,9 @@ plt <- ggplot(df_covrg) +
 
 ggsave("~/Desktop/Writting_up_genetic_risk/coverage_over_slope.png" ,plt, width = 6, height = 4)
 ######################################################
-# do the multiple cluster testing
-######################################################
-SIM <- list()
-s_lst <- (-150:150)/4000
-s <- s_lst[s_id]
-latent_curve <- latent_curve_1 + s * (-3.5:3.5)
-# do many simulation for a single latent curve
-for(j in 1:100){
-  try(SIM[[j]] <- simulation(N,num_snp,num_buckets,latent_curve, SIGMA, h_0, mv_flag = TRUE, mtcv_flag = TRUE, 10^15, degree_freedom))
-}
-dir.create("multi_curve_test_jointly")
-save(SIM, file =  paste0("multi_curve_test_jointly/multi_curve_test_jointly_",s_id,".Rdata"))
-
 # get the power test figure for log-likelihood testing
+######################################################
+
 p_multi_cluster <- function(SIM){
   rslt_alt_hyp <- SIM[[3]]
   rslt_null_hyp <- SIM[[4]]
@@ -284,21 +316,9 @@ for(i in c(1:10)){
 }
 plot(colMeans(sumsim)/10)
 
-#####################################
-# simulation with different frailty
-#####################################
-SIM <- list()
-u_lst <- exp(0.1*(1:100))
-latent_curve <- latent_curve_1 
-gamma_shape <- u_lst[s_id]
-# do many simulation for a single latent curve
-for(j in 1:100){
-  try(SIM[[j]] <- simulation(N,num_snp,num_buckets,latent_curve, SIGMA, h_0, mv_flag = TRUE, mtcv_flag = FALSE, gamma_shape, degree_freedom))
-}
-
-save(SIM, file = paste0("frailty_test/frailty_test",s_id,".Rdata"))
-
-# get the power test figure for log-likelihood testing
+######################################################
+# get the power test figure with different frailty
+######################################################
 p_non_flat <- function(SIM){
   rslt_alt_hyp <- SIM[[3]]
   rslt_null_hyp <- SIM[[4]]
@@ -370,21 +390,8 @@ ggplot(df_hazard_over_age,aes(AGE)) +
 
 
 ######################################################
-# test the effect of a healthier population
+# get the power test figure healthier elders effect
 ######################################################
-SIM <- list()
-s_lst <- (-100:100)/100
-s <- s_lst[s_id]
-latent_curve <- latent_curve_1 
-h_0 <- (9.5 + s * (-3.5:3.5))/10000 # underlying risk should be increasing over time
-# do many simulation for a single latent curve
-for(j in 1:100){
-  try(SIM[[j]] <- simulation(N,num_snp,num_buckets,latent_curve, SIGMA, h_0, mv_flag = TRUE, mtcv_flag = FALSE, 10^15, degree_freedom))
-}
-
-save(SIM, file = paste0("healthy_elder_effect/joint_healthy_elder_test",s_id,".Rdata"))
-
-# get the power test figure for log-likelihood testing
 p_non_flat <- function(SIM){
   rslt_alt_hyp <- SIM[[3]]
   rslt_null_hyp <- SIM[[4]]

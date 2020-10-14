@@ -5,7 +5,8 @@ require(survival)
 require(dplyr)
 library("mvtnorm")
 
-args <- commandArgs(trailingOnly = TRUE)                                  
+args <- commandArgs(trailingOnly = TRUE)      
+# disease id should be your designated here; we put a handle here to allow screening of multiple diseases 
 ds_id <- args[1]
 
 ##############################################################################################################
@@ -66,18 +67,16 @@ snp_for_clustering <- snp_for_clustering %>%
   mutate(SE = ifelse(abs(OR-1)< 10^(-5), 10, SE)) %>%
   mutate(OR = ifelse(SE > 10, 1, OR)) %>% 
   mutate(SE = ifelse(SE > 10, 10, SE))
-write.csv(snp_for_clustering, paste(ds_id,"/result_of_true_data/",ds_id,"_snp_for_clustering.csv", sep = ""), row.names = F)
+write.csv(snp_for_clustering, paste(ds_id,"/univariate_estimation/",ds_id,"_snp_for_clustering.csv", sep = ""), row.names = F)
 
 ###############################################
 # doing EM
 ###############################################
-flip_snp <- read.csv(paste(ds_id,"/",ds_id,"_flipped_snp.csv", sep = ""))
-
 # first get the convergence of EMs
 para <- load_SNP_coef(paste("univariate_estimation_rm_LD/",ds_id,"_snp_for_clustering.csv", sep = ""), 
-                      paste("SNP_info/",ds_id,"_flipped_snp.csv", sep = ""))
+                      "LOCATION OF a FILE that has the loci of protective MAF")
 
-num_itr <- 2 #20
+num_itr <- 20
 K <- 6
 ll <- matrix(0, K, num_itr)
 for(k in 1:K){
@@ -111,7 +110,7 @@ for(k in 1:K){
   }
 }
 ll <- apply(ll, 1, function(x) x[which.max(x)])
-write.csv(ll, paste(ds_id,"/result_of_true_data/",ds_id, "_ll_matrix.csv", sep = ""), row.names = F)
+write.csv(ll, paste(ds_id,"/univariate_estimation/",ds_id, "_ll_matrix.csv", sep = ""), row.names = F)
 
 list_of_rslt <- list()
 for(k in 1:K){
@@ -148,4 +147,4 @@ for(k in 1:K){
   list_of_rslt[[k]] <- rslt
 }
 # Save an object to a file
-save(list_of_rslt, file = paste(ds_id,"/result_of_true_data/",ds_id, "_true_data.RData", sep = ""))
+save(list_of_rslt, file = paste(ds_id,"/univariate_estimation/",ds_id, "_true_data.RData", sep = ""))
