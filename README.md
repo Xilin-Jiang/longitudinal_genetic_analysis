@@ -2,7 +2,7 @@
 
 #### The description of code describes how to estimate genetic risk with the interval-censored proportional hazard model; and inferring latent curves  .
 
-The file [Genetic_longitudinal_functions.R](https://github.com/Xilin-Jiang/longitudinal_genetic_analysis/blob/main/Genetic_longitudinal_functions.R "Genetic_longitudinal_functions.R") has all functions needed for simulating disease event over age, and performing proportional hazard model analysis on over the simulated population. 
+The file [Genetic_longitudinal_functions.R](https://github.com/Xilin-Jiang/longitudinal_genetic_analysis/blob/main/Genetic_longitudinal_functions.R "Genetic_longitudinal_functions.R") has all functions needed for simulating disease event over age, and performing proportional hazard model analysis over the simulated population. 
 
 ###### What you need to for the simulation
 
